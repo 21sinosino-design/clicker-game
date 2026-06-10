@@ -1,0 +1,74 @@
+# 村人Bの過労死クリッカー 🗡️
+
+「村人B」をタップして限界まで働かせ、ゴールドを稼ぐ放置・クリッカー系の Web ゲームです。
+タップ収入・自動収入の成長、広告ブースト、グローバルランキング、レイドボスなどを備え、スマホでも遊べる PWA として作りました。
+
+---
+
+## 主な機能
+
+- **クリッカー＆放置の成長要素**：タップで稼ぐゴールドと、毎秒入る自動収入（GPS: Gold Per Second）でゲームが進行
+- **ブースト演出**：「広告を見てエナドリを飲む」と一定時間タップ収入が 10 倍になる時限ブースト
+- **グローバルランキング**：スコアをサーバーに送信し、全プレイヤーのトップ 10 を表示（Cloudflare KV に保存）
+- **レイドボス**：全員で挑む共有ボスのAPIを実装
+- **データの永続化**：`localStorage` に進行状況を保存し、再訪時に続きから遊べる
+- **PWA 対応**：Service Worker（`sw.js`）を登録し、スマホのホーム画面に追加して起動可能
+
+---
+
+## 技術スタック
+
+| 区分 | 使用技術 |
+|------|----------|
+| フロントエンド | HTML / CSS / Vanilla JavaScript（フレームワーク不使用） |
+| バックエンド | Cloudflare Pages Functions（サーバーレス） |
+| データ保存 | Cloudflare KV（ランキング・レイドボスの共有データ） |
+| クライアント保存 | localStorage |
+| その他 | PWA（Service Worker） |
+
+---
+
+## ディレクトリ構成
+
+```
+clicker-game/
+├── public/
+│   ├── index.html      # ゲーム画面
+│   ├── main.js         # ゲームロジック（状態管理・収入計算・UI更新）
+│   ├── style.css       # スタイル
+│   ├── sw.js           # Service Worker（PWA）
+│   └── images/         # 村人Bなどの画像素材
+└── functions/
+    └── api/
+        ├── ranking.js  # ランキングの登録(POST)・取得(GET) API
+        └── raidboss.js # レイドボス用 API
+```
+
+---
+
+## 仕組みのポイント
+
+- **サーバーレスなランキング**：`functions/api/ranking.js` が Cloudflare Pages Functions として動作。POST でスコアを受け取り、降順ソートしてトップ 10 を KV に保存、GET で取得する軽量設計です。
+- **フレームワークなしの状態管理**：ゴールド・毎秒収入・各種ブーストの状態を素の JavaScript で管理し、一定間隔で UI を更新しています。
+- **オフラインでも動く**：Service Worker によりキャッシュを利用し、PWA として動作します。
+
+---
+
+## ローカルでの動かし方
+
+`public/` は静的ファイルなので、簡易サーバーを立てればすぐ確認できます。
+
+```bash
+# 例: Python の簡易サーバー
+cd public
+python -m http.server 8000
+# → http://localhost:8000 を開く
+```
+
+ランキング・レイドボス API（`functions/`）も含めて動かす場合は、Cloudflare の Wrangler を使います。
+
+```bash
+npx wrangler pages dev public
+```
+
+> ※ ランキング機能を動かすには、Cloudflare 側で KV namespace（`RANKING_DB`）のバインディング設定が必要です。
