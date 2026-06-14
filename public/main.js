@@ -23,6 +23,18 @@ let boostTimeRemaining = 0;
 let boostInterval = null;
 
 let isPremium = false; // 👑 プレミアム購入フラグ
+let premiumRestoreCode = ""; // 💳 購入時のStripeセッションID（復元コードとして保存）
+
+// 🆕 改良で追加した状態（古いセーブでも安全なように初期値あり）
+let tapLevel = 1;              // 💪 タップ強化レベル
+let souls = 0;                 // 👻 転生で得た魂（永久収入倍率）
+let rebirths = 0;              // 🔁 転生した回数
+let lifetimeGold = 0;          // 💰 累計で稼いだゴールド（転生計算に使う）
+let discoveredItems = {};      // 📖 これまでに発見したキャラ（転生しても消えない図鑑記録）
+let unlockedAchievements = {}; // 🏆 解除済みの実績
+let soundMuted = false;        // 🔇 効果音ミュート
+let comboCount = 0;            // 🔥 連打コンボ数
+let comboTimer = null;         // コンボをリセットするタイマー
 
 // 🎲 1. 【最重要】ここにGeminiが生成した100個のデータを貼り付けます！
 const itemDataMaster = [
@@ -196,6 +208,9 @@ function calculateGPS() {
     goldPerSecond = 0;
   }
 
+  // 👻🏆 永久倍率（転生の魂・実績ボーナス）を反映！
+  goldPerSecond = Math.floor(goldPerSecond * getPrestigeMultiplier() * getAchievementMultiplier());
+
   // 👑 プレミアム特典：自動稼ぎが永久に「2倍」！！
   if (typeof isPremium !== 'undefined' && isPremium) {
     goldPerSecond *= 2;
@@ -211,7 +226,8 @@ function playPatheticVoiceAndText() {
   const text = patheticVoices[Math.floor(Math.random() * patheticVoices.length)];
 
   // 🗣️ ブラウザの機能を使って、実際に喋らせる！（MP3不要！）
-  if ('speechSynthesis' in window) {
+  // 🔇 ミュート中は喋らない。連打時にうるさくならないよう半分の確率で発声。
+  if (!soundMuted && 'speechSynthesis' in window && Math.random() < 0.5) {
     speechSynthesis.cancel(); // 連打した時に前の声をキャンセルして「ヒ、ヒ、ヒィッ！」と吃音っぽくする
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.8;  // 早口で焦った感じ
@@ -220,7 +236,8 @@ function playPatheticVoiceAndText() {
     speechSynthesis.speak(utterance);
   }
 
-  // 💬 タップした場所に悲鳴の文字を浮かび上がらせる
+  // 💬 タップした場所に悲鳴の文字を浮かび上がらせる（連打時はたまに表示してうるさくしない）
+  if (Math.random() > 0.5) return;
   const textEl = document.createElement("div");
   textEl.innerText = text;
   textEl.style.position = "absolute";
@@ -256,28 +273,48 @@ let audioCtx;
 
 
 
-// 💧 村人Bをクリックした時の処理（プレミアム2倍対応版！）
+// 💧 村人Bをクリックした時の処理（改良版：タップ強化・コンボ・クリティカル対応）
 document.getElementById("slimeBtn").addEventListener("click", () => {
 
-  let clickGold = 1; // 基本は1G
+  // 🔥 連打コンボを加算
+  registerCombo();
 
-  // ⚡ 秘薬効果中（赤画面）ならベースが10Gに！
+  // 基本タップ力 ＋ 毎秒収入の1%（後半でもタップが無駄にならないように）
+  let base = getTapPower() + Math.floor(goldPerSecond * 0.01);
+
+  // 👻🏆 永久倍率（転生の魂・実績）
+  base = base * getPrestigeMultiplier() * getAchievementMultiplier();
+
+  // 🔥 コンボ倍率（連打するほど強い：最大x2）
+  let clickGold = base * getComboMultiplier();
+
+  // ⚡ 秘薬効果中（赤画面）はさらに10倍！
   if (typeof boostTimeRemaining !== 'undefined' && boostTimeRemaining > 0) {
-    clickGold = 10;
+    clickGold *= 10;
   }
 
   // 👑 プレミアム特典：タップの稼ぎも永久に「2倍」！！
-  // （通常時は2G、秘薬中はなんと20Gになる！）
   if (typeof isPremium !== 'undefined' && isPremium) {
     clickGold *= 2;
   }
 
-  gold += clickGold;
+  // 🎯 クリティカルヒット！（12%の確率でx8の大ダメージ）
+  const isCrit = Math.random() < 0.12;
+  if (isCrit) clickGold *= 8;
+
+  clickGold = Math.floor(clickGold);
+  if (clickGold < 1) clickGold = 1;
+
+  addGold(clickGold);
   lifetimeClicks += 1;
+
+  // ✨ タップした場所に「+ゴールド」を浮かべる
+  spawnFloatingGold((isCrit ? "💥+" : "+") + formatNumber(clickGold), isCrit);
 
   if (typeof updateVillagerFace === 'function') updateVillagerFace();
   playPatheticVoiceAndText();
 
+  checkAchievements();
   updateUI();
   saveGame();
 });
@@ -355,6 +392,7 @@ function rollGacha(tier) {
   // キャラを付与！
   if (!gameStateItems[pulledChar.id]) gameStateItems[pulledChar.id] = { count: 0, cost: 0 };
   gameStateItems[pulledChar.id].count += 1;
+  discoveredItems[pulledChar.id] = true; // 📖 図鑑に記録（転生しても残る）
 
   // 演出！
   document.body.style.animation = "feverFlash 0.3s ease";
@@ -369,6 +407,7 @@ function rollGacha(tier) {
   updateUI();
   if (typeof updateCollectionUI === 'function') updateCollectionUI();
   if (typeof updateSynthesisUI === 'function') updateSynthesisUI();
+  checkAchievements();
   saveGame();
 }
 
@@ -390,31 +429,29 @@ function updateCollectionUI() {
 
   itemDataMaster.forEach(data => {
     const state = gameStateItems[data.id];
-    if (state && state.count > 0) {
+    const count = state ? state.count : 0;
+    const owned = count > 0;
+    if (owned || discoveredItems[data.id]) {
       hasCharacter = true;
 
-      // レア度によって枠と文字の色を変える！
-      let borderColor = "#7f8c8d"; // N (グレー)
-      if (data.rarity === "R") borderColor = "#3498db";   // 青
-      if (data.rarity === "SR") borderColor = "#9b59b6";  // 紫
-      if (data.rarity === "SSR") borderColor = "#f1c40f"; // 金
-      if (data.rarity === "UR") borderColor = "#ff00ff";  // ピンク
-      if (data.rarity === "LR") borderColor = "#ff0000";  // 赤
+      // レア度ごとの色（モダン配色）
+      let rar = "#64748b"; // N
+      if (data.rarity === "R") rar = "#5aa9ff";
+      if (data.rarity === "SR") rar = "#b794ff";
+      if (data.rarity === "SSR") rar = "#ffd24a";
+      if (data.rarity === "UR") rar = "#f472b6";
+      if (data.rarity === "LR") rar = "#fb7185";
 
-      // 📱 ポケモン図鑑風のコンパクトなカードデザイン！
+      // 📱 図鑑カード（CSSの .dex-card を使用）
       container.innerHTML += `
-        <div style="background: linear-gradient(135deg, #2c3e50, #1a252f); border: 2px solid ${borderColor}; border-radius: 8px; padding: 8px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.5); position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 120px;">
-          
-          <div style="position: absolute; top: 0; left: 0; background: ${borderColor}; color: #000; font-size: 10px; font-weight: bold; padding: 2px 6px; border-bottom-right-radius: 8px;">No.${data.id}</div>
-          
-          <div style="font-size: 11px; color: ${borderColor}; font-weight: bold; margin-top: 12px;">【${data.rarity}】</div>
-          <div style="font-weight: bold; color: #fff; font-size: 12px; margin: 4px 0; line-height: 1.2;">${data.name}</div>
-          
-          <div style="font-size: 9px; color: #bdc3c7; text-align: left; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 4px; line-height: 1.2;">${data.desc}</div>
-          
-          <div style="margin-top: auto; border-top: 1px solid #34495e; padding-top: 4px;">
-            <div style="font-size: 11px; color: #f1c40f; font-weight: bold;">Lv.${state.count}</div>
-            <div style="font-size: 10px; color: #2ecc71;">+${formatNumber(data.income * state.count)}G/秒</div>
+        <div class="dex-card ${owned ? '' : 'locked'}" style="--rar:${rar}">
+          <div class="dex-no">No.${data.id}</div>
+          <div class="dex-rar">【${data.rarity}】</div>
+          <div class="dex-name">${data.name}</div>
+          <div class="dex-desc">${data.desc}</div>
+          <div class="dex-foot">
+            <div class="dex-lv">Lv.${count}</div>
+            <div class="dex-income">+${formatNumber(data.income * count)}G/秒</div>
           </div>
         </div>
       `;
@@ -424,7 +461,7 @@ function updateCollectionUI() {
   // まだ誰も持っていない場合の表示
   if (!hasCharacter) {
     container.style.display = "block"; // 文字だけの時はGridを解除
-    container.innerHTML = `<div style="color:#7f8c8d; width:100%; text-align:center; padding-top: 20px;">ガチャを回して社畜を集めよう！</div>`;
+    container.innerHTML = `<div class="empty-hint">ガチャを回して社畜を集めよう！</div>`;
   }
 }
 
@@ -447,6 +484,8 @@ function updateUI() {
 
   // もし錬成画面の更新機能があれば呼ぶ
   if (typeof updateSynthesisUI === 'function') updateSynthesisUI();
+  if (typeof updateTapUpgradeUI === 'function') updateTapUpgradeUI();
+  if (typeof updatePrestigeUI === 'function') updatePrestigeUI();
 }
 
 
@@ -465,8 +504,12 @@ async function loadRanking() {
       list.innerHTML = "<li>まだ誰も登録していません！1位になる大チャンス！</li>";
     } else {
       ranking.forEach((entry, index) => {
-        list.innerHTML += `<li style="margin-bottom:5px; border-bottom:1px solid #34495e; padding-bottom:5px;">
-          <span style="color:#f1c40f; font-weight:bold;">${index + 1}位</span>: ${entry.name} - ${formatNumber(entry.score)} G
+        const rank = index + 1;
+        const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
+        list.innerHTML += `<li class="rank-${rank}">
+          <span class="rank-badge">${medal}</span>
+          <span class="rank-name">${entry.name}</span>
+          <span class="rank-score">${formatNumber(entry.score)} G</span>
         </li>`;
       });
     }
@@ -488,6 +531,7 @@ document.getElementById("submitScoreBtn").addEventListener("click", async () => 
 
   const myName = prompt("ランキングに登録する名前（シグマネーム）を入力してください", "名無し");
   if (!myName) return;
+  myPlayerName = myName; // 😈 レイドボスのトドメ表示にも使う名前を覚えておく
 
   try {
     const res = await fetch('/api/ranking', {
@@ -554,14 +598,30 @@ async function sendDamage() {
 }
 
 function updateBossUI(boss) {
-  document.getElementById("bossName").innerText = boss.name;
-  document.getElementById("bossHpText").innerText = formatNumber(boss.hp) + " / " + formatNumber(boss.maxHp);
-  const hpPercent = (boss.hp / boss.maxHp) * 100;
-  document.getElementById("bossHpBar").style.width = hpPercent + "%";
-  if (boss.hp <= 0) {
-    document.getElementById("bossDefeatedMsg").style.display = "block";
-    document.getElementById("bossDefeatedMsg").innerText = `🎉 討伐完了！トドメを刺した勇者: ${boss.defeatedBy} 🎉`;
-    document.getElementById("bossHpBar").style.width = "0%";
+  if (!boss) return;
+  const nameEl = document.getElementById("bossName");
+  if (nameEl) nameEl.innerText = boss.name;
+
+  const hpText = document.getElementById("bossHpText");
+  if (hpText) hpText.innerText = formatNumber(Math.max(0, boss.hp)) + " / " + formatNumber(boss.maxHp);
+
+  const bar = document.getElementById("bossHpBar");
+  if (bar) bar.style.width = Math.max(0, (boss.hp / boss.maxHp) * 100) + "%";
+
+  const msg = document.getElementById("bossDefeatedMsg");
+  if (msg) {
+    if (boss.lastDefeated) {
+      msg.style.display = "block";
+      msg.style.color = "#f1c40f";
+      msg.innerText = `🏆 前回討伐: ${boss.lastDefeated.name} ／ トドメ: ${boss.lastDefeated.by}`;
+    } else {
+      msg.style.display = "none";
+    }
+  }
+
+  // 🎉 たった今、誰かが倒した瞬間ならお祝いトースト！
+  if (boss.justDefeated && boss.lastDefeated && typeof showToast === 'function') {
+    showToast(`🎉 ${boss.lastDefeated.name} を討伐！トドメ: ${boss.lastDefeated.by}`);
   }
 }
 
@@ -580,7 +640,17 @@ function switchScreen(screenId) {
     targetScreen.classList.add('active');
     targetScreen.style.display = 'block';
   }
+
+  // 📱 ボトムナビの「今いるタブ」をハイライト
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.target === screenId);
+  });
+
   window.scrollTo(0, 0);
+
+  // 画面を開いた瞬間に中身を最新化する
+  if (screenId === 'screen-online' && typeof fetchBoss === 'function') fetchBoss();
+  if (screenId === 'screen-stats' && typeof updatePrestigeUI === 'function') updatePrestigeUI();
 }
 
 // ==========================================
@@ -647,6 +717,7 @@ function doSynthesis(fromRarity, toRarity) {
   // 新しいキャラを付与！
   if (!gameStateItems[randomTarget.id]) gameStateItems[randomTarget.id] = { count: 0, cost: 0 };
   gameStateItems[randomTarget.id].count += 1;
+  discoveredItems[randomTarget.id] = true; // 📖 図鑑に記録（転生しても残る）
 
   // 🧠 脳汁演出！
   document.body.classList.add("shake-active");
@@ -661,6 +732,7 @@ function doSynthesis(fromRarity, toRarity) {
   updateUI();
   if (typeof updateCollectionUI === 'function') updateCollectionUI();
   updateSynthesisUI();
+  checkAchievements();
   saveGame();
 }
 
@@ -677,13 +749,21 @@ updateUI = function () {
 // 💣 全データ消去＆最初からやり直す機能
 // ==========================================
 function resetGame() {
-  if (confirm("⚠️ 本当に最初からやり直しますか？\n（所持ゴールドやキャラは消去されますが、プレミアム課金の権利は残ります！）")) {
-    
+  if (confirm("⚠️ 本当に最初からやり直しますか？\n（ゴールド・キャラ・図鑑・転生・実績はすべて消去されますが、プレミアム課金の権利は残ります！）")) {
+
     gold = 0;
     goldPerSecond = 0;
     gameStateItems = {};
     totalPulls = 0;
     lifetimeClicks = 0;
+    // 🆕 追加要素もまとめてリセット
+    tapLevel = 1;
+    souls = 0;
+    rebirths = 0;
+    lifetimeGold = 0;
+    discoveredItems = {};
+    unlockedAchievements = {};
+    comboCount = 0;
     // 💡 isPremium = false; には絶対にしない！！（課金は残す）
 
     // セーブデータを一度消して、即座に今の状態（課金だけ残った状態）で上書きセーブ！
@@ -746,13 +826,25 @@ function saveGame() {
     items: gameStateItems,
     totalPulls: totalPulls,
     lifetimeClicks: lifetimeClicks,
-    isPremium: typeof isPremium !== 'undefined' ? isPremium : false // 👑 課金フラグを確実に保存！
+    isPremium: typeof isPremium !== 'undefined' ? isPremium : false, // 👑 課金フラグを確実に保存！
+    premiumRestoreCode: premiumRestoreCode, // 💳 復元コード（StripeセッションID）
+    // 🆕 追加要素も保存
+    tapLevel: tapLevel,
+    souls: souls,
+    rebirths: rebirths,
+    lifetimeGold: lifetimeGold,
+    discoveredItems: discoveredItems,
+    unlockedAchievements: unlockedAchievements,
+    soundMuted: soundMuted,
+    lastSaved: Date.now() // 😴 放置報酬の計算用に「最後に保存した時刻」を残す
   };
   localStorage.setItem("clicker_save_data", JSON.stringify(saveData));
 }
 
 function loadGame() {
   const saved = localStorage.getItem("clicker_save_data");
+  let offlineSeconds = 0;
+
   if (saved) {
     const data = JSON.parse(saved);
     gold = data.gold || 0;
@@ -760,17 +852,52 @@ function loadGame() {
     gameStateItems = data.items || {};
     totalPulls = data.totalPulls || 0;
     lifetimeClicks = data.lifetimeClicks || 0;
-    
+
+    // 🆕 追加要素の読み込み（古いセーブには無いので初期値でフォロー）
+    tapLevel = data.tapLevel || 1;
+    souls = data.souls || 0;
+    rebirths = data.rebirths || 0;
+    lifetimeGold = (typeof data.lifetimeGold === 'number') ? data.lifetimeGold : (data.gold || 0);
+    discoveredItems = data.discoveredItems || {};
+    unlockedAchievements = data.unlockedAchievements || {};
+    soundMuted = data.soundMuted || false;
+
+    // 既存プレイヤー救済：今持っているキャラは図鑑に発見済みとして記録
+    for (const id in gameStateItems) {
+      if (gameStateItems[id] && gameStateItems[id].count > 0) discoveredItems[id] = true;
+    }
+
     // 👑 課金状況をしっかり思い出す！
     if (typeof isPremium !== 'undefined') {
-      isPremium = data.isPremium || false; 
+      isPremium = data.isPremium || false;
+    }
+    premiumRestoreCode = data.premiumRestoreCode || "";
+
+    // 😴 留守にしていた時間（秒）を計算
+    if (data.lastSaved) {
+      offlineSeconds = Math.floor((Date.now() - data.lastSaved) / 1000);
     }
   }
 
   // 👑 ロード直後にプレミアム状態（広告消去など）を復元する！
-  if (typeof applyPremiumState === 'function') applyPremiumState(); 
+  if (typeof applyPremiumState === 'function') applyPremiumState();
 
   calculateGPS();
+
+  // 😴 放置報酬：留守の間もGPSの50%で稼ぐ（最大8時間ぶん）
+  if (offlineSeconds > 60 && goldPerSecond > 0) {
+    const capped = Math.min(offlineSeconds, 8 * 3600);
+    const earned = Math.floor(goldPerSecond * capped * 0.5);
+    if (earned > 0) {
+      addGold(earned);
+      showOfflineModal(earned, capped);
+    }
+  }
+
+  // 🔇 ミュートボタンの見た目を状態に合わせる
+  const mBtn = document.getElementById("muteBtn");
+  if (mBtn) mBtn.innerText = soundMuted ? "🔇" : "🔊";
+
   updateUI();
   if (typeof updateVillagerFace === 'function') updateVillagerFace();
   if (typeof updateCollectionUI === 'function') updateCollectionUI();
@@ -780,23 +907,289 @@ function loadGame() {
 
 
 // ==========================================
+// 🆕 改良システム（タップ強化・コンボ・クリティカル・放置報酬・転生・実績）
+// ==========================================
+
+// 💰 ゴールド加算（累計記録＆世界ボスへのダメージ蓄積も同時に行う）
+function addGold(amount) {
+  if (isNaN(amount) || amount <= 0) return;
+  gold += amount;
+  lifetimeGold += amount;
+  pendingDamage += amount; // 😈 稼いだ分だけ世界ボスにダメージが溜まる
+}
+
+// ✖️ 各種 永久倍率
+function getPrestigeMultiplier() { return 1 + souls * 0.1; }                  // 👻 魂1つにつき +10%
+function getComboMultiplier() { return 1 + Math.min(comboCount, 50) * 0.02; } // 🔥 連打で最大 x2
+function getAchievementMultiplier() {
+  let m = 1;
+  for (let i = 0; i < ACHIEVEMENTS.length; i++) {
+    if (unlockedAchievements[ACHIEVEMENTS[i].id]) m += ACHIEVEMENTS[i].bonus;
+  }
+  return m;
+}
+
+// 💪 タップ強化
+function getTapPower() { return tapLevel; }
+function getTapUpgradeCost() { return Math.floor(30 * Math.pow(1.4, tapLevel - 1)); }
+function buyTapUpgrade() {
+  const cost = getTapUpgradeCost();
+  if (gold < cost) { showToast("⚠️ ゴールドが足りません"); return; }
+  gold -= cost;
+  tapLevel += 1;
+  updateUI();
+  saveGame();
+}
+function updateTapUpgradeUI() {
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.innerText = v; };
+  set("tapLevel", tapLevel);
+  set("tapPowerNow", formatNumber(getTapPower()));
+  set("tapPowerNext", formatNumber(tapLevel + 1));
+  set("tapUpgradeCost", formatNumber(getTapUpgradeCost()));
+  const btn = document.getElementById("tapUpgradeBtn");
+  if (btn) btn.disabled = gold < getTapUpgradeCost();
+}
+
+// 🔥 連打コンボ
+function registerCombo() {
+  comboCount += 1;
+  if (comboTimer) clearTimeout(comboTimer);
+  comboTimer = setTimeout(() => { comboCount = 0; updateComboUI(); }, 1500);
+  updateComboUI();
+}
+function updateComboUI() {
+  const disp = document.getElementById("comboDisplay");
+  if (!disp) return;
+  if (comboCount >= 5) {
+    disp.style.display = "block";
+    const c = document.getElementById("comboCount"); if (c) c.innerText = comboCount;
+    const m = document.getElementById("comboMult"); if (m) m.innerText = getComboMultiplier().toFixed(1);
+  } else {
+    disp.style.display = "none";
+  }
+}
+
+// ✨ タップした場所に「+ゴールド」をふわっと浮かべる
+function spawnFloatingGold(text, isCrit) {
+  const btn = document.getElementById("slimeBtn");
+  if (!btn) return;
+  const rect = btn.getBoundingClientRect();
+  const el = document.createElement("div");
+  el.className = "floating-gold" + (isCrit ? " crit" : "");
+  el.textContent = text;
+  el.style.left = (rect.left + rect.width / 2 + (Math.random() * 80 - 40)) + "px";
+  el.style.top = (rect.top + rect.height / 2 + (Math.random() * 40 - 20)) + "px";
+  el.style.setProperty("--rot", (Math.random() * 30 - 15) + "deg");
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 900);
+}
+
+// 🍞 画面上部に出るトースト通知
+function showToast(msg) {
+  const c = document.getElementById("toastContainer");
+  if (!c) return;
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.innerHTML = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+
+// 🔇 効果音ミュートの切り替え
+function toggleMute() {
+  soundMuted = !soundMuted;
+  const b = document.getElementById("muteBtn");
+  if (b) b.innerText = soundMuted ? "🔇" : "🔊";
+  if (soundMuted && 'speechSynthesis' in window) speechSynthesis.cancel();
+  saveGame();
+}
+
+// 😴 放置報酬モーダル
+function showOfflineModal(earned, seconds) {
+  const m = document.getElementById("offlineModal");
+  if (!m) return;
+  const g = document.getElementById("offlineGold");
+  if (g) g.innerText = formatNumber(earned);
+  const mins = Math.floor(seconds / 60);
+  const h = Math.floor(mins / 60);
+  const mm = mins % 60;
+  const t = document.getElementById("offlineTime");
+  if (t) t.innerText = `（${h > 0 ? h + "時間" : ""}${mm}分ぶん ／ 効率50%）`;
+  m.style.display = "flex";
+}
+function closeOfflineModal() {
+  const m = document.getElementById("offlineModal");
+  if (m) m.style.display = "none";
+  updateUI();
+}
+
+// 👻 転生（プレステージ）システム
+function getSoulsDeserved() { return Math.floor(Math.pow(Math.max(0, lifetimeGold) / 1e6, 0.5)); }
+function getSoulsGain() { return Math.max(0, getSoulsDeserved() - souls); }
+function soulsNeededForNext() { return Math.pow(souls + 1, 2) * 1e6; }
+function doPrestige() {
+  const gain = getSoulsGain();
+  if (gain < 1) { showToast("💀 まだ転生できません"); return; }
+
+  if (!confirm(
+    `👻 村人Bを過労死させ、来世へ転生します。\n\n` +
+    `獲得する魂: ${gain}個（すべての収入が永久に強化されます）\n\n` +
+    `⚠️ ゴールド・キャラ・タップ強化はリセットされます。\n` +
+    `図鑑の記録・実績・課金は引き継がれます。\n\n` +
+    `本当に転生しますか？`
+  )) return;
+
+  souls += gain;
+  rebirths += 1;
+
+  // リセット（魂・図鑑・実績・課金は残す）
+  gold = 0;
+  goldPerSecond = 0;
+  gameStateItems = {};
+  tapLevel = 1;
+  comboCount = 0;
+
+  checkAchievements();
+  calculateGPS();
+  updateUI();
+  if (typeof updateCollectionUI === 'function') updateCollectionUI();
+  if (typeof updateSynthesisUI === 'function') updateSynthesisUI();
+  saveGame();
+
+  showToast(`✨ 転生成功！魂 +${gain}（合計 ${souls}個 ／ 収入 x${getPrestigeMultiplier().toFixed(1)}）`);
+  switchScreen('screen-home');
+}
+
+function updatePrestigeUI() {
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.innerText = v; };
+  set("statSouls", souls);
+  set("statSoulMult", getPrestigeMultiplier().toFixed(1));
+  const gain = getSoulsGain();
+  set("soulsGain", gain);
+  const btn = document.getElementById("prestigeBtn");
+  if (btn) btn.disabled = gain < 1;
+  const hint = document.getElementById("prestigeHint");
+  if (hint) {
+    if (gain < 1) {
+      const need = soulsNeededForNext() - lifetimeGold;
+      hint.innerText = `次の魂まで 累計あと ${formatNumber(Math.max(0, need))} G（現在の累計 ${formatNumber(lifetimeGold)} G）`;
+    } else {
+      hint.innerText = `転生の準備が整いました！（累計 ${formatNumber(lifetimeGold)} G）`;
+    }
+  }
+  updateStatsUI();
+  updateAchievementUI();
+}
+
+function updateStatsUI() {
+  const el = document.getElementById("statsList");
+  if (!el) return;
+  const dexCount = Object.keys(discoveredItems).length;
+  el.innerHTML =
+    `💰 累計ゴールド: <b>${formatNumber(lifetimeGold)}</b><br>` +
+    `👆 総タップ数: <b>${formatNumber(lifetimeClicks)}</b><br>` +
+    `🎰 ガチャ回数: <b>${formatNumber(totalPulls)}</b><br>` +
+    `📖 図鑑 発見数: <b>${dexCount} / ${itemDataMaster.length}</b><br>` +
+    `🔁 転生回数: <b>${rebirths}</b><br>` +
+    `👻 所持する魂: <b>${souls}</b>（収入 x${getPrestigeMultiplier().toFixed(1)}）<br>` +
+    `🏆 実績ボーナス: <b>x${getAchievementMultiplier().toFixed(2)}</b>`;
+}
+
+// 🏆 実績データ
+const ACHIEVEMENTS = [
+  { id: "click100",  icon: "👆", name: "初出勤",       desc: "村人Bを100回タップ",   bonus: 0.05, cond: () => lifetimeClicks >= 100 },
+  { id: "click5000", icon: "💪", name: "社畜の鑑",     desc: "村人Bを5,000回タップ", bonus: 0.10, cond: () => lifetimeClicks >= 5000 },
+  { id: "gacha50",   icon: "🎰", name: "ガチャ中毒",   desc: "ガチャを50回まわす",   bonus: 0.05, cond: () => totalPulls >= 50 },
+  { id: "gold1m",    icon: "💰", name: "成金",         desc: "累計100万Gを稼ぐ",     bonus: 0.10, cond: () => lifetimeGold >= 1e6 },
+  { id: "gold1b",    icon: "🤑", name: "大富豪",       desc: "累計10億Gを稼ぐ",      bonus: 0.15, cond: () => lifetimeGold >= 1e9 },
+  { id: "dex30",     icon: "📖", name: "コレクター",   desc: "30種のキャラを発見",   bonus: 0.10, cond: () => Object.keys(discoveredItems).length >= 30 },
+  { id: "dexall",    icon: "🌟", name: "図鑑マスター", desc: "全100種を発見",        bonus: 0.50, cond: () => Object.keys(discoveredItems).length >= itemDataMaster.length },
+  { id: "rebirth",   icon: "👻", name: "転生者",       desc: "はじめて転生する",     bonus: 0.20, cond: () => rebirths >= 1 },
+  { id: "rebirth10", icon: "😈", name: "輪廻の覇者",   desc: "10回 転生する",        bonus: 0.50, cond: () => rebirths >= 10 },
+];
+
+function checkAchievements() {
+  let changed = false;
+  for (let i = 0; i < ACHIEVEMENTS.length; i++) {
+    const a = ACHIEVEMENTS[i];
+    if (!unlockedAchievements[a.id] && a.cond()) {
+      unlockedAchievements[a.id] = true;
+      changed = true;
+      showToast(`🏆 実績解除「${a.name}」 収入 +${Math.round(a.bonus * 100)}%`);
+    }
+  }
+  if (changed) {
+    calculateGPS();
+    updateAchievementUI();
+    saveGame();
+  }
+}
+
+function updateAchievementUI() {
+  const el = document.getElementById("achievementList");
+  if (!el) return;
+  let html = "";
+  for (let i = 0; i < ACHIEVEMENTS.length; i++) {
+    const a = ACHIEVEMENTS[i];
+    const on = !!unlockedAchievements[a.id];
+    html +=
+      `<div class="ach-item ${on ? 'unlocked' : 'ach-locked'}">` +
+        `<div class="ach-icon">${a.icon}</div>` +
+        `<div>` +
+          `<div class="ach-name">${a.name} <span style="color:#2ecc71;font-size:11px;">(+${Math.round(a.bonus * 100)}%)</span></div>` +
+          `<div class="ach-desc">${a.desc}${on ? ' ✅' : ''}</div>` +
+        `</div>` +
+      `</div>`;
+  }
+  el.innerHTML = html;
+}
+
+// ==========================================
 // 🚀 ゲーム起動＆心臓部（※絶対にファイルの一番下に書く！）
 // ==========================================
 
 // 1. 【超重要】心臓が動く前に、まず記憶をロードする！！
 loadGame();
 
+// 💳 Stripe決済から戻ってきた時の処理（?premium_session=cs_... が付いていたら自動で検証＆解放）
+(function handleStripeReturn() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get("premium_session");
+    const cancelled = params.get("premium_cancel");
+    if (sid) {
+      // URLからパラメータを消して、リロード時の二重処理を防ぐ
+      history.replaceState(null, "", window.location.pathname);
+      verifyAndUnlock(sid, false);
+    } else if (cancelled) {
+      history.replaceState(null, "", window.location.pathname);
+      if (typeof showToast === 'function') showToast("決済をキャンセルしました");
+    }
+  } catch (e) { /* URL解析失敗は無視 */ }
+})();
+
 // 2. 記憶を取り戻した後で、心臓（オートセーブ）を動かし始める！！
 setInterval(() => {
   if (goldPerSecond > 0) {
-    gold += goldPerSecond;
+    addGold(goldPerSecond);
     document.getElementById("gold").innerText = formatNumber(Math.floor(gold));
     updateUI();
   }
+  checkAchievements();
 
   // 💾 毎秒オートセーブ（ロード後に動くから安心！）
   saveGame();
 }, 1000);
+
+// 😈 世界共有レイドボス：起動時に取得し、その後は定期的に通信して更新する
+if (typeof fetchBoss === 'function') fetchBoss();
+setInterval(() => {
+  if (pendingDamage > 0) {
+    if (typeof sendDamage === 'function') sendDamage();
+  } else {
+    if (typeof fetchBoss === 'function') fetchBoss();
+  }
+}, 8000);
 
 // ==========================================
 // ⚡ 秘薬（ダイレクトリンク広告）システム
@@ -865,43 +1258,66 @@ function activateEnergyDrink() {
 // 👑 本物のプレミアム課金システム（最速リリース用・固定コード方式）
 // ==========================================
 
-// ① 購入ボタンを押した時の処理（Stripeの決済ページへ飛ばす）
-function openPaymentPage() {
-  // ⚠️ Stripeで発行した本物の決済URLをここに入れます！（今はダミーのURLです）
-  const paymentUrl = "https://buy.stripe.com/テスト用のアドレス";
+// ① 購入ボタン：Cloudflare Function 経由で Stripe Checkout を作成し、決済ページへ移動
+async function openPaymentPage() {
+  if (typeof isPremium !== 'undefined' && isPremium) {
+    alert("👑 すでにプレミアムが解放されています！");
+    return;
+  }
+  if (!confirm("安全な決済ページ（Stripe）に移動します。よろしいですか？\n（カード決済・500円。決済が完了すると自動でプレミアムが適用されます）")) return;
 
-  if (confirm("安全な外部の決済ページ（Stripe）に移動します。よろしいですか？\n※決済完了後、画面に表示される『解放コード』を忘れずにメモしてください！")) {
-    window.open(paymentUrl, "_blank");
+  try {
+    const res = await fetch("/api/checkout", { method: "POST" });
+    const data = await res.json();
+    if (res.ok && data.url) {
+      window.location.href = data.url; // Stripe の決済ページへ移動
+      return;
+    }
+    alert("決済ページの作成に失敗しました。\n（" + (data.error || "サーバー側のStripe設定を確認してください") + "）");
+  } catch (e) {
+    alert("通信エラーが発生しました。時間をおいて再度お試しください。");
   }
 }
 
-// ② コードを入力して「解放」を押した時の処理
-function unlockPremium() {
-  // 念のため、すでに買っているかチェック
+// ② 「復元」ボタン：購入済みの人が復元コード（StripeのセッションID cs_...）で再解放する
+async function unlockPremium() {
   if (typeof isPremium !== 'undefined' && isPremium) {
-    alert("👑 すでにプレミアム特権が解放されています！");
+    alert("👑 すでにプレミアムが解放されています！");
     return;
   }
-
-  // プレイヤーが入力した文字を取得
   const inputElement = document.getElementById("premiumSecretCode");
   if (!inputElement) return;
-  const inputCode = inputElement.value.trim();
+  const code = inputElement.value.trim();
+  if (!code) {
+    alert("復元コード（cs_ から始まる文字列）を入力してください。");
+    return;
+  }
+  await verifyAndUnlock(code, true);
+}
 
-  // 🔑 ここが極秘の「解放コード」です！（好きな文字に変更してください！）
-  const SECRET_PASS = "OVERWORK-VIP-777";
+// 💳 Stripeのセッションをサーバー検証して、支払い済みならプレミアムを解放する共通処理
+async function verifyAndUnlock(sessionId, manual) {
+  try {
+    const res = await fetch("/api/verify-purchase?session_id=" + encodeURIComponent(sessionId));
+    const data = await res.json();
 
-  if (inputCode === SECRET_PASS) {
-    alert("✨ コード承認！✨\n神様、ご支援ありがとうございます！プレミアムパックが解放されました！");
-
-    // 課金フラグをONにしてセーブ＆画面更新！
-    isPremium = true;
-    saveGame();
-    applyPremiumState();
-    calculateGPS();
-    updateUI();
-  } else {
-    alert("❌ コードが間違っています。前後にスペースなどが入っていないか確認してください。");
+    if (res.ok && data.premium) {
+      isPremium = true;
+      premiumRestoreCode = sessionId;
+      saveGame();
+      if (typeof applyPremiumState === 'function') applyPremiumState();
+      calculateGPS();
+      updateUI();
+      alert(
+        "✨ ご支援ありがとうございます！プレミアムが解放されました！\n\n" +
+        "【復元コード】\n" + sessionId + "\n\n" +
+        "※機種変更やデータ削除のときに、このコードを入力すると復元できます。\nスクリーンショット等で控えておくと安心です。"
+      );
+    } else if (manual) {
+      alert("❌ 確認できませんでした。\n決済が完了していないか、コードが正しくない可能性があります。");
+    }
+  } catch (e) {
+    if (manual) alert("通信エラーが発生しました。時間をおいて再度お試しください。");
   }
 }
 
@@ -921,9 +1337,21 @@ function applyPremiumState() {
     // 3. 秘薬ボタンを「VIP仕様（広告なし）」にする
     const potionBtn = document.getElementById("secretPotionBtn");
     if (potionBtn) {
-      potionBtn.innerHTML = "👑 VIP特権で秘薬を飲む！<br><span style='font-size: 12px;'>(広告なしで即発動！ / 1分間タップ10倍)</span>";
-      potionBtn.style.background = "linear-gradient(45deg, #f1c40f, #f39c12)";
-      potionBtn.style.boxShadow = "0 4px 0 #d35400";
+      potionBtn.innerHTML = "👑 VIP特権で秘薬を飲む！<small>広告なしで即発動！ / 1分間タップ10倍</small>";
+      potionBtn.style.background = "linear-gradient(135deg, #ffd24a, #ff9d2e)";
+      potionBtn.style.color = "#4a2c00";
+      potionBtn.style.boxShadow = "var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.3)";
+    }
+
+    // 4. 復元コードがあれば「適用中」メッセージ内に表示
+    const codeBox = document.getElementById("premiumRestoreCodeBox");
+    if (codeBox) {
+      if (premiumRestoreCode) {
+        codeBox.style.display = "block";
+        codeBox.textContent = "復元コード: " + premiumRestoreCode;
+      } else {
+        codeBox.style.display = "none";
+      }
     }
   }
 }
