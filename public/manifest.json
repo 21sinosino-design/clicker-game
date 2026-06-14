@@ -1,0 +1,16 @@
+{
+  "name": "村人Bの過労死クリッカー",
+  "short_name": "過労死クリッカー",
+  "description": "村人Bをタップして限界まで働かせ、ゴールドを稼ぐ放置・クリッカーゲーム。",
+  "lang": "ja",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d1017",
+  "theme_color": "#0e1117",
+  "icons": [
+    { "src": "/images/face_1.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/images/face_1.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
