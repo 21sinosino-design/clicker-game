@@ -190,6 +190,16 @@ function formatNumber(num) {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(num);
 }
 
+// 🛡️ XSS対策：ユーザーが入力した文字（名前など）をHTMLに出す前に無害化する
+function escapeHtml(str) {
+  return String(str == null ? "" : str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // 💰 毎秒の稼ぎ（GPS）を計算する機能（プレミアム2倍対応版！）
 function calculateGPS() {
   goldPerSecond = 0;
@@ -508,7 +518,7 @@ async function loadRanking() {
         const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
         list.innerHTML += `<li class="rank-${rank}">
           <span class="rank-badge">${medal}</span>
-          <span class="rank-name">${entry.name}</span>
+          <span class="rank-name">${escapeHtml(entry.name)}</span>
           <span class="rank-score">${formatNumber(entry.score)} G</span>
         </li>`;
       });
@@ -529,8 +539,10 @@ document.getElementById("submitScoreBtn").addEventListener("click", async () => 
     return;
   }
 
-  const myName = prompt("ランキングに登録する名前（シグマネーム）を入力してください", "名無し");
-  if (!myName) return;
+  const rawName = prompt("ランキングに登録する名前（シグマネーム）を入力してください", "名無し");
+  if (!rawName) return;
+  // 名前は20文字まで＋山括弧を除去（不正なタグの混入を防ぐ）
+  const myName = rawName.replace(/[<>]/g, "").trim().slice(0, 20) || "名無し";
   myPlayerName = myName; // 😈 レイドボスのトドメ表示にも使う名前を覚えておく
 
   try {
@@ -621,7 +633,7 @@ function updateBossUI(boss) {
 
   // 🎉 たった今、誰かが倒した瞬間ならお祝いトースト！
   if (boss.justDefeated && boss.lastDefeated && typeof showToast === 'function') {
-    showToast(`🎉 ${boss.lastDefeated.name} を討伐！トドメ: ${boss.lastDefeated.by}`);
+    showToast(`🎉 ${escapeHtml(boss.lastDefeated.name)} を討伐！トドメ: ${escapeHtml(boss.lastDefeated.by)}`);
   }
 }
 

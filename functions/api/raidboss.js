@@ -34,7 +34,11 @@ export async function onRequest(context) {
   if (request.method === "POST") {
     const data = await request.json();
     let damage = Number(data.damage) || 0;
-    const playerName = data.name || "名無し勇者";
+    // 🛡️ 名前を無害化（山括弧除去＋20文字まで）
+    const playerName = String(data.name == null ? "名無し勇者" : data.name)
+      .replace(/[<>]/g, "")
+      .trim()
+      .slice(0, 20) || "名無し勇者";
 
     let boss = await db.get(DB_KEY, "json");
     if (!boss) boss = makeBoss(1);

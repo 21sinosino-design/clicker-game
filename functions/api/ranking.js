@@ -5,7 +5,15 @@ export async function onRequest(context) {
   // 📝 POST: スマホからスコアが送られてきた時の処理（登録）
   if (request.method === "POST") {
     const data = await request.json();
-    const { name, score } = data;
+
+    // 🛡️ 入力を無害化：名前は山括弧除去＋20文字まで、スコアは数値のみ
+    const safeName = String(data.name == null ? "名無し" : data.name)
+      .replace(/[<>]/g, "")
+      .trim()
+      .slice(0, 20) || "名無し";
+    const safeScore = Number(data.score);
+    const score = (isFinite(safeScore) && safeScore > 0) ? safeScore : 0;
+    const name = safeName;
 
     // 今のランキングをデータベースから取得
     let ranking = await db.get("top_scores", "json");
